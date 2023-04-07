@@ -1,0 +1,101 @@
+
+Num=1
+
+Usage="Usage: expand -t: --help num\n
+       where:\n
+       -h|--help   display this help and exit\n
+       num         identifier for test combination\n
+             1     COMP   32bit ASCII\n
+             2     BINARY 32bit ASCII\n
+             3     COMP-5 32bit ASCII\n
+             4     COMP   64bit ASCII\n
+             5     BINARY 64bit ASCII\n
+             6     COMP-5 64bit ASCII\n
+             7     COMP   32bit EBCDIC\n
+             8     BINARY 32bit EBCDIC\n
+             9     COMP-5 32bit EBCDIC\n
+             10    COMP   64bit EBCDIC\n
+             11    BINARY 64bit EBCDIC\n
+             12    COMP-5 64bit EBCDIC\n
+       "
+       
+function CmdLnParse
+{
+   while getopts h name "$@"; do
+      case "$name" in
+          h) echo -e ${Usage}; exit 0;;
+          ?) echo -e ${Usage}; exit 1;;
+       esac
+   done
+
+   shift $(($OPTIND-1))
+
+   if (( $# > 0 ))
+   then
+      Num=$1
+      shift
+   fi
+   if (( $# > 0 ))
+   then
+         echo  "ERROR: Too many arguments." >&2
+         exit 1
+   fi
+
+   if (( $Num < 0 || $Num > 12 ))
+   then
+      echo "Num is out of range" >&2
+      exit 1
+   fi
+}
+
+# get options 
+CmdLnParse $*
+
+SrcDir=./src
+DstDir=./src${Num}
+SedArgs=""
+
+function setSedArgs
+{
+   Num=$1
+   case $Num
+   in
+   1|4|7|10)
+      SedArgs="-e s/COMPBINARY/COMP/g"
+      ;;
+   2|5|8|11)
+      SedArgs="-e s/COMPBINARY/BINARY/g"
+      ;;
+   3|6|9|12)
+      SedArgs="-e s/COMPBINARY/COMP-5/g"
+      ;;
+   *)
+      echo "Unknown Num"
+      exit 1
+      ;;
+   esac
+   SedArgs="$SedArgs -e s/THETESTNUM/$Num/g"
+}
+
+function processFile
+{
+   src="$1"
+   prog="${src##*/}"
+   dst="${DstDir}/${prog}"
+   sed $SedArgs <$src >$dst
+}
+
+rm -rf ${DstDir}
+mkdir  ${DstDir}
+
+setSedArgs $Num
+
+for File in $(ls src/*.cbl)
+do
+   processFile $File
+done 
+
+for File in $(ls src/*.cpy)
+do
+   processFile $File
+done 

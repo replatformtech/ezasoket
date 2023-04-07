@@ -1,0 +1,72 @@
+
+Num=1
+
+function CmdLnParse
+{
+   while getopts h name "$@"; do
+      case "$name" in
+          h) echo -e ${Usage}; exit 0;;
+          ?) echo -e ${Usage}; exit 1;;
+       esac
+   done
+
+   shift $(($OPTIND-1))
+
+   if (( $# > 0 ))
+   then
+      Num=$1
+      shift
+   fi
+   if (( $# > 0 ))
+   then
+         echo  "ERROR: Too many arguments." >&2
+         exit 1
+   fi
+
+   if (( $Num < 0 || $Num > 12 ))
+   then
+      echo "Num is out of range" >&2
+      exit 1
+   fi
+}
+
+CmdLnParse $*
+
+faildir=fail${Num}
+
+if ((    $Num == 4  || $Num == 5  || $Num == 6
+      || $Num == 10 || $Num == 11 || $Num == 12
+   ))
+then
+   ExtraPath=$( pwd | sed -e 's/test$/lib64/' )
+else
+   ExtraPath=$( pwd | sed -e 's/test$/lib/' )
+fi
+
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${ExtraPath}
+export LD_LIBRARY_PATH
+
+TmpFile=/tmp/runtests.$USER.out
+
+rm -rf $faildir
+mkdir $faildir
+
+for script in $(ls tests/*.sh)
+do
+   base=${script##*/}
+   base=${base%.*}
+   $SHELL $script $Num 2>&1 >$TmpFile 2>&1
+   if grep -q "^FAIL" $TmpFile
+   then
+      cp $TmpFile ${faildir}/$base.txt
+      echo $base ": FAIL" 
+   elif ! grep -q "^COMPLETE" $TmpFile
+   then
+      cp $TmpFile ${faildir}/$base.txt
+      echo $base ": NOT COMPLETE" 
+   else
+      rm -f $TmpFile ${faildir}/$base.txt
+      echo $base ": PASS" 
+   fi
+done
+

@@ -1,0 +1,175 @@
+
+Num=1
+
+. ../srcgen/config.sh
+
+Usage="Usage: compile --help num\n
+       where:\n
+       -h|--help   display this help and exit\n
+       num         identifier for test combination\n
+             1     COMP   32bit ASCII\n
+             2     BINARY 32bit ASCII\n
+             3     COMP-5 32bit ASCII\n
+             4     COMP   64bit ASCII\n
+             5     BINARY 64bit ASCII\n
+             6     COMP-5 64bit ASCII\n
+             7     COMP   32bit EBCDIC\n
+             8     BINARY 32bit EBCDIC\n
+             9     COMP-5 32bit EBCDIC\n
+             10    COMP   64bit EBCDIC\n
+             11    BINARY 64bit EBCDIC\n
+             12    COMP-5 64bit EBCDIC\n
+       "
+       
+function CmdLnParse
+{
+   while getopts h name "$@"; do
+      case "$name" in
+          h) echo -e ${Usage}; exit 0;;
+          ?) echo -e ${Usage}; exit 1;;
+       esac
+   done
+
+   shift $(($OPTIND-1))
+
+   if (( $# > 0 ))
+   then
+      Num=$1
+      shift
+   fi
+   if (( $# > 0 ))
+   then
+         echo  "ERROR: Too many arguments." >&2
+         exit 1
+   fi
+
+   if (( $Num < 0 || $Num > 12 ))
+   then
+      echo "Num is out of range" >&2
+      exit 1
+   fi
+}
+
+# get options 
+CmdLnParse $*
+
+SrcDir=./src${Num}
+BinDir=./bin${Num}
+
+rm -rf $BinDir
+mkdir $BinDir
+
+COBVENDOR=""
+if [[ -n ${COBDIR-} ]]      # COBDIR is set, assume microfocus cobol
+then
+   echo "using MicroFocus compiler because COBDIR was set"
+   COBVENDOR="MF"
+elif which cob2 >/dev/null 2>/dev/null # IBM cobol
+then
+   echo "using IBM compiler because cob2 command was found"
+   COBVENDOR="IBM"
+elif which cobc >/dev/null 2>/dev/null # open cobol
+then
+   echo "using OpenCOBOL compiler because cobc command was found"
+   COBVENDOR="OC"
+else
+   echo "ERROR: cobol compiler could not be determined"
+   exit 1;
+fi
+
+function getcalls
+{
+   prog=$1
+   rtn=" "
+   grep "^......  *CALL " $prog \
+      |sed -e 's/^......  *CALL  *.\([A-Z0-9]*\)[^A-Z0-9].*$/\1/' \
+      |while read called
+       do
+          called=$(echo $called |tr "[A-Z]" "[a-z]")
+          called="util/${called}.cbl"
+          if [[ -r $called ]]
+          then
+             tmp=$(echo $rtn| grep $called)
+             if [[ -z "$tmp" ]]; then
+                rtn=$(echo $rtn " ${called}")
+                echo " ${called}"
+             fi
+          fi
+       done
+   echo " "
+}
+
+Error=0
+if ((    $Num == 4  || $Num == 5  || $Num == 6
+      || $Num == 10 || $Num == 11 || $Num == 12
+   ))
+then
+   ExtraPath=$( pwd | sed -e 's/test$/lib64/' )
+   ObjPath=$( pwd | sed -e 's/test$/obj64/' )
+else
+   ExtraPath=$( pwd | sed -e 's/test$/lib/' )
+   ObjPath=$( pwd | sed -e 's/test$/obj/' )
+fi
+
+if ((    $Num == 7  || $Num == 8  || $Num == 9
+      || $Num == 10 || $Num == 11 || $Num == 12
+   ))
+then
+   NumericDisplayFmt=-fsign-ebcdic
+else
+   NumericDisplayFmt=-fsign-ascii
+fi
+
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${ExtraPath}
+export LD_LIBRARY_PATH
+
+if [[ ${COBVENDOR} = "MF" ]]; then
+   for file in $(ls ${SrcDir}/*.cbl)
+   do
+      calledprogs=$(getcalls $file)
+      file=${file##*/}
+      file=${file%%.*}
+      export COBCPY=${SrcDir}
+      if (( $USESTATIC == 1))
+      then
+         DynLib=""
+         StaticLib="${ObjPath}/ezasoket.o"
+      else
+         DynLib="-L ${ExtraPath} -l ezasoket"
+         StaticLib=""
+      fi
+      if cob -g -x \
+           -C NOTRUNC \
+           ${DynLib} \
+           -o ${BinDir}/$file \
+           ${SrcDir}/$file.cbl ${StaticLib} $calledprogs
+      then
+         rm -f $file.o $file.idy $file.int
+      else
+         rm -f $file.o $file.idy $file.int
+         echo "compile $file failed"
+         Error=1
+      fi
+   done
+elif [[ ${COBVENDOR} = "OC" ]]; then
+   for file in $(ls ${SrcDir}/*.cbl)
+   do
+      calledprogs=$(getcalls $file)
+      file=${file##*/}
+      file=${file%%.*}
+      if ! cobc -debug -g -x -std=ibm ${NumericDisplayFmt} -L ${ExtraPath} -I./${SrcDir} -l ezasoket -o ${BinDir}/$file ${SrcDir}/$file.cbl $calledprogs
+      then
+         rm -f $file.c $file.c.h $file.c.l.h
+         echo "compile $file failed"
+         Error=1
+      else
+         rm -f $file.c $file.c.h $file.c.l.h
+      fi
+   done
+else
+   echo "cob vendor ${COBVENDOR} is not supported now"
+   Error=1
+fi
+
+exit $Error
+

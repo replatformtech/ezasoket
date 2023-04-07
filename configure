@@ -1,0 +1,197 @@
+
+. ./src/stringent.sh || exit 1
+
+DefineArray=""
+COBVENDOR=""
+
+Usage="Usage: configure -D:h \n
+       where:\n
+       -h|                display this help and exit\n
+       -c                 specify the cob compiler\n
+       -D                 specify the personal define macro in config.h"
+
+ConfigHeadFile=srcgen/config.h
+ConfigMkfFile=mkfgen/config.mkf
+ConfigShFile=srcgen/config.sh
+
+TmpConfigHeadFile=srcgen/config.h.tmp
+TmpConfigMkfFile=mkfgen/config.mkf.tmp
+TmpConfigShFile=srcgen/config.sh.tmp
+
+function CmdLnParse
+{
+   while getopts c:D:h name "$@"; do
+      case "$name" in
+          c) COBVENDOR="$OPTARG";;
+          D) DefineArray="${DefineArray} $OPTARG";;
+          h) echo -e ${Usage}; exit 0;;
+          ?) echo -e ${Usage}; exit 1;;
+       esac
+   done
+}
+
+function Update
+{
+   Src=$1
+   Dst=$2
+   if ! cmp -s -- "$Src" "$Dst"
+   then
+      mv -- "$Src" "$Dst"
+   fi
+}
+
+rm -rf ${TmpConfigHeadFile}
+rm -rf ${TmpConfigMkfFile}
+
+CmdLnParse "$@"
+
+# add user define to config.h
+# here all use define is stored in DefineArray
+for Define in ${DefineArray};do
+   echo "#define $Define" >> ${TmpConfigHeadFile} 
+done
+
+UNAME=$(uname -a)
+OpSys=$(echo $UNAME | sed -e's/ .*$//')
+CC="gcc"
+TARGET32="lib/libezasoket.so"
+USESTATIC=0
+
+case $OpSys
+in
+AIX)
+   SharedObjLinkOption="-shared"
+#   SharedObjLinkOption="-bundle"
+   LibIconv="-liconv"
+   PosixSemLib=""
+   OS="AIX"
+   BYTEORDER="BE"
+   ;;
+Linux)
+   SharedObjLinkOption="-shared"
+   LibIconv=""
+   PosixSemLib="-lrt"
+   OS="Linux"
+   BYTEORDER="LE"
+   ;;
+HP-UX)
+   SharedObjLinkOption="-n"
+   LibIconv=""
+   PosixSemLib="-lrt"
+   OS="HPUX"
+   CC="cc"
+   BYTEORDER="BE"
+   USESTATIC=1
+   ;;
+*)
+   SharedObjLinkOption="-shared"
+   LibIconv=""
+   PosixSemLib=""
+   OS="Other"
+   BYTEORDER="BE"
+   ;;
+esac
+
+HW=$(uname -m)
+case $HW
+in
+x86_64)
+   CCDYN="-fPIC"
+   TARGET64="lib64/libezasoket.so"
+   BIT32OPT="-m32"
+   BIT64OPT="-m64"
+   ;;
+s390x)
+   CCDYN="-fPIC"
+   BYTEORDER="BE"    # override Linux setting for zLinux
+   # BUG: need a better way to detect 64 bit:
+   TARGET64="lib64/libezasoket.so"
+   BIT32OPT="-m31"
+   BIT64OPT="-m64"
+   ;;
+ia64)
+   CCDYN=""
+   BYTEORDER="LE"   # override Linux setting for zLinux
+   TARGET64="obj64/ezasoket.o"
+   TARGET32="obj/ezasoket.o"
+   BIT32OPT=""
+   BIT64OPT="+DD64"
+   ;;
+*)
+   CCDYN=""
+   TARGET64=""
+   BIT32OPT="-m32"
+   BIT64OPT="-m64"
+   ;;
+esac
+
+
+echo "OS = $OS"    >>${TmpConfigMkfFile}
+echo "CCDYN = $CCDYN"    >>${TmpConfigMkfFile}
+echo "TARGET64 = $TARGET64" >>${TmpConfigMkfFile}
+echo "TARGET32 = $TARGET32" >>${TmpConfigMkfFile}
+echo "BIT32OPT = $BIT32OPT" >>${TmpConfigMkfFile}
+echo "BIT64OPT = $BIT64OPT" >>${TmpConfigMkfFile}
+
+echo "#define $OS" >>${TmpConfigHeadFile}
+
+echo "#define COBCOMP_OC 8"          >> ${TmpConfigHeadFile}
+echo "#define COBCOMP_MF 5"          >> ${TmpConfigHeadFile}
+echo "#define COBCOMP_IBM 2"         >> ${TmpConfigHeadFile}
+
+if [[ -z ${COBVENDOR} ]]
+then
+   if [[ -n ${COBDIR-} ]]      # COBDIR is set, assume microfocus cobol
+   then
+      echo "[configure] using MicroFocus compiler because COBDIR was set"
+      COBVENDOR="MF"
+   elif which cob2 >/dev/null 2>/dev/null # IBM cobol
+   then
+      echo "[configure] using IBM compiler because cob2 command was found"
+      COBVENDOR="IBM"
+   elif which cobc >/dev/null 2>/dev/null # open cobol
+   then
+      echo "[configure] using OpenCOBOL compiler because cobc command was found"
+      COBVENDOR="OC"
+   else
+      echo "ERROR: cobol compiler could not be determined"
+      exit 1;
+   fi
+fi
+
+echo "#define COBCOMP COBCOMP_${COBVENDOR}"  >> ${TmpConfigHeadFile}
+
+case ${COBVENDOR}
+in
+MF)
+   echo "COBLINK = cob -x -Q\"-rpath\" -Q $COBDIR/lib" >> ${TmpConfigMkfFile}
+   ;;
+IBM)
+   echo "COBLINK = ${CC} \$(CCFLAGS)"       >> ${TmpConfigMkfFile}
+   ;;
+OC)
+   echo "COBLINK = ${CC} \$(CCFLAGS) -lcob" >> ${TmpConfigMkfFile}
+   ;;
+*)
+   echo "ERROR: cobol compiler ${COBVENDOR} not supported"
+   exit 1;
+   ;;
+esac
+
+echo "LIBICONV = $LibIconv" >>${TmpConfigMkfFile}
+echo "LINKOPT_SO = $SharedObjLinkOption" >>${TmpConfigMkfFile}
+echo "CC = ${CC}" >>${TmpConfigMkfFile}
+
+echo "USESTATIC=${USESTATIC}" >>${TmpConfigShFile}
+
+if [[ $BYTEORDER = "LE" ]]
+then
+   echo "#define BINARY_LE" >>${TmpConfigHeadFile}
+fi
+
+# check whether we need to update the timestamp for the output files
+Update ${TmpConfigHeadFile} ${ConfigHeadFile} 
+Update ${TmpConfigMkfFile}  ${ConfigMkfFile} 
+Update ${TmpConfigShFile}  ${ConfigShFile} 
+
+echo "configure successful, you are ready for make"

@@ -1,0 +1,135 @@
+#!/bin/bash
+
+Usage="Usage: compile -t: --help \n
+       where:\n
+       -h|--help          display this help and exit\n
+       -t                 specify the type for COMPBINARY\n"
+       
+function CmdLnParse
+{
+   set -- `getopt -u -o t: -l help -- "$@"`
+   if [ $? != 0 ] ; then echo "Command Line is error" >&2 ; exit 1 ; fi
+   while true ; do
+      case "$1" in
+          -t ) 
+             case "$2" in
+                "") shift 2 ;;
+                *)  COMPBINTYPE="$2"; shift 2 ;;
+             esac ;;
+          -h|--help ) echo -e ${Usage}; exit 0;;
+          -- ) shift; break ;;             
+         *) echo -e ${Usage}; exit 1;;
+       esac
+   done
+}
+
+# get options 
+CmdLnParse $*
+
+if [[ -z ${COMPBINTYPE} ]]
+then
+   echo "COMPBINTYPE is set to comp by default"
+   COMPBINTYPE="comp"
+fi
+SrcDir=$(echo "src_"${COMPBINTYPE})
+ReplaceCompBinStr="s/COMPBINARY/"${COMPBINTYPE}"/g"
+
+COBVENDOR=""
+if [[ -n ${COBDIR-} ]]      # COBDIR is set, assume microfocus cobol
+then
+   echo "using MicroFocus compiler because COBDIR was set"
+   COBVENDOR="MF"
+elif which cob2 >/dev/null 2>/dev/null # IBM cobol
+then
+   echo "using IBM compiler because cob2 command was found"
+   COBVENDOR="IBM"
+elif which cobc >/dev/null 2>/dev/null # open cobol
+then
+   echo "using OpenCOBOL compiler because cobc command was found"
+   COBVENDOR="OC"
+else
+   echo "ERROR: cobol compiler could not be determined"
+   exit 1;
+fi
+
+function getcalls
+{
+   prog=$1
+   rtn=""
+   grep "^......  *CALL " $prog \
+      |sed -e 's/^......  *CALL  *.\([A-Z0-9]*\)[^A-Z0-9].*$/\1/' \
+      |while read called
+       do
+          called=$(echo $called |tr "[A-Z]" "[a-z]")
+          called="util/${called}.cbl"
+          if [[ -e $called ]]
+          then
+             /bin/echo -n " ${called}"
+          fi
+       done
+   echo ""
+}
+
+function processCOMPBINARY
+{
+   prog=$1
+   prog=${file##*/}
+   cat $1 | sed -e ${ReplaceCompBinStr} > ${SrcDir}/$prog
+}
+
+Error=0
+ExtraPath=$( pwd | sed -e 's/test$/lib/' )
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${ExtraPath}
+export LD_LIBRARY_PATH
+
+if [[ ${COBVENDOR} == "MF" ]]; then
+   for file in $(ls src/*.cbl)
+   do
+      processCOMPBINARY $file
+   done 
+   for file in $(ls src/*.cpy)
+   do
+      processCOMPBINARY $file
+   done 
+   for file in $(ls src/*.cbl)
+   do
+      calledprogs=$(getcalls $file)
+      file=${file##*/}
+      file=${file%%.*}
+      export COBCPY=src
+      if ! cob -g -x -L ${ExtraPath} -l ezasoket -o bin/$file src/$file.cbl $calledprogs
+      then
+         rm -f $file.o $file.idy $file.int
+         echo "compile $file failed"
+         Error=1
+      else
+         rm -f $file.o $file.idy $file.int
+      fi
+   done
+elif [[ ${COBVENDOR} == "OC" ]]; then
+   for file in $(ls src/*.cbl)
+   do
+      processCOMPBINARY $file
+   done 
+   for file in $(ls src/*.cpy)
+   do
+      processCOMPBINARY $file
+   done 
+   for file in $(ls ${SrcDir}/*.cbl)
+   do
+      calledprogs=$(getcalls $file)
+      file=${file##*/}
+      file=${file%%.*}
+      if ! cobc -debug -g -x -std=ibm -L ${ExtraPath} -I./${SrcDir} -l ezasoket -o bin/$file ${SrcDir}/$file.cbl $calledprogs
+      then
+         echo "compile $file failed"
+         Error=1
+      fi
+   done
+else
+   echo "cob vendor ${COBVENDOR} is not supported now"
+   Error=1
+fi
+
+exit $Error
+

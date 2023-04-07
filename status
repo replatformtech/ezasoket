@@ -1,0 +1,24 @@
+#!/bin/bash
+
+if (( $# == 0 ))
+then
+
+svn status test/src
+svn status test/tests
+svn status test/util
+svn status src
+svn status doc
+svn status configure
+svn status makefile
+svn status status
+svn status test/compile
+svn status test/runtests
+svn status test/expand
+
+else
+
+bash ./status |grep "^\?" |sed -e's/^.  *//' |xargs -n1 svn add
+
+fi
+
+
